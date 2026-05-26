@@ -139,6 +139,23 @@ def api_message(message_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# -----------------------------------------------------------------------------
+# Additional endpoint to generate a new random email on demand.  Returns a
+# JSON object with a new email address selected from the configured domains.
+@app.route("/api/new-email")
+def api_new_email():
+    """
+    Generate a new random email address using one of the configured domains.
+    This endpoint is used by the front‑end to avoid reloading the page when
+    the admin wants to start over with a fresh inbox.
+    """
+    domains = load_domains()
+    if not domains:
+        return jsonify({"error": "No domains configured"}), 500
+    domain = random.choice(domains)
+    email = random_email(domain)
+    return jsonify({"email": email})
+
 
 # HTML template with mobile responsive styles and JS
 TEMPLATE = """
@@ -182,7 +199,7 @@ TEMPLATE = """
         .actions {
             margin-top: 8px;
         }
-        .copy-btn, .refresh-btn {
+        .copy-btn, .refresh-btn, .new-btn {
             padding: 6px 10px;
             margin-left: 6px;
             border: none;
@@ -199,6 +216,10 @@ TEMPLATE = """
         }
         .copy-btn:hover { background-color: #45a049; }
         .refresh-btn:hover { background-color: #8e24aa; }
+        .new-btn {
+            background-color: #ff9800;
+        }
+        .new-btn:hover { background-color: #f57c00; }
         .inbox {
             display: flex;
             flex-direction: row;
@@ -256,6 +277,7 @@ TEMPLATE = """
                 <div class="actions">
                     <button class="copy-btn" onclick="copyText('{{ email }}')">Copy email</button>
                     <button class="refresh-btn" onclick="manualRefresh('{{ email }}', 1)">Refresh</button>
+                    <button class="new-btn" onclick="newEmail()">Tạo email mới</button>
                 </div>
             </div>
             <div class="inbox">
@@ -340,6 +362,44 @@ TEMPLATE = """
                 `;
             })
             .catch(err => console.error('Error fetching message detail', err));
+        }
+        // Generate a new random email without reloading the page.
+        function newEmail() {
+            // Save the current email for cleanup
+            const currentEmail = emails[0];
+            fetch('/api/new-email')
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) {
+                    alert('Lỗi tạo email mới');
+                    return;
+                }
+                const newAddr = data.email;
+                // Update emails array
+                emails[0] = newAddr;
+                // Update UI elements with the new email
+                document.querySelector('.email-address').textContent = newAddr;
+                // Update buttons to reference the new email
+                const copyBtn = document.querySelector('.copy-btn');
+                copyBtn.setAttribute('onclick', "copyText('" + newAddr + "')");
+                const refreshBtn = document.querySelector('.refresh-btn');
+                refreshBtn.setAttribute('onclick', "manualRefresh('" + newAddr + "', 1)");
+                // Reset state: clear old polling interval and delete state entry
+                if (state[currentEmail] && state[currentEmail].timer) {
+                    clearInterval(state[currentEmail].timer);
+                }
+                delete state[currentEmail];
+                state[newAddr] = { selectedId: null, timer: null };
+                // Clear inbox UI and show loading
+                document.querySelector('#list-1 ul').innerHTML = '';
+                document.getElementById('content-1').innerHTML = '<em>Đang tải...</em>';
+                // Fetch messages for new email and restart polling
+                fetchMessages(newAddr, 1);
+                state[newAddr].timer = setInterval(() => fetchMessages(newAddr, 1), POLL_INTERVAL);
+            })
+            .catch(err => {
+                console.error('Error generating new email', err);
+            });
         }
         // Poll messages periodically
         emails.forEach((email) => {
